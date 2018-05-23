@@ -2,12 +2,11 @@ package socks5
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"os"
-
-	"golang.org/x/net/context"
 )
 
 const (
@@ -144,7 +143,7 @@ func (s *Server) ServeConn(conn net.Conn) error {
 		return err
 	}
 
-	request, err := NewRequest(bufConn)
+	request, err := NewRequest(bufConn, conn)
 	if err != nil {
 		if err == unrecognizedAddrType {
 			if err := sendReply(conn, addrTypeNotSupported, nil); err != nil {

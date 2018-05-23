@@ -1,13 +1,14 @@
 package socks5
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"github.com/hanwen/go-fuse/splice"
 	"io"
 	"net"
 	"strconv"
 	"strings"
-
-	"golang.org/x/net/context"
 )
 
 const (
@@ -79,6 +80,7 @@ type Request struct {
 	// AddrSpec of the actual destination (might be affected by rewrite)
 	realDestAddr *AddrSpec
 	bufConn      io.Reader
+	Conn         io.Reader
 }
 
 type conn interface {
@@ -87,7 +89,7 @@ type conn interface {
 }
 
 // NewRequest creates a new Request from the tcp connection
-func NewRequest(bufConn io.Reader) (*Request, error) {
+func NewRequest(bufConn io.Reader, Conn io.Reader) (*Request, error) {
 	// Read the version byte
 	header := []byte{0, 0, 0}
 	if _, err := io.ReadAtLeast(bufConn, header, 3); err != nil {
@@ -110,6 +112,7 @@ func NewRequest(bufConn io.Reader) (*Request, error) {
 		Command:  header[1],
 		DestAddr: dest,
 		bufConn:  bufConn,
+		Conn:     Conn,
 	}
 
 	return request, nil
@@ -197,9 +200,12 @@ func (s *Server) handleConnect(ctx context.Context, conn conn, req *Request) err
 		return fmt.Errorf("Failed to send reply: %v", err)
 	}
 
+	bufConn, _ := req.bufConn.(*bufio.Reader)
+	bufConn.Discard(bufConn.Buffered())
+
 	// Start proxying
 	errCh := make(chan error, 2)
-	go proxy(target, req.bufConn, errCh)
+	go proxy(target, req.Conn, errCh)
 	go proxy(conn, target, errCh)
 
 	// Wait
@@ -356,9 +362,29 @@ type closeWriter interface {
 // proxy is used to suffle data from src to destination, and sends errors
 // down a dedicated channel
 func proxy(dst io.Writer, src io.Reader, errCh chan error) {
-	_, err := io.Copy(dst, src)
-	if tcpConn, ok := dst.(closeWriter); ok {
-		tcpConn.CloseWrite()
+	pair, err := splice.Get()
+	pair.MaxGrow()
+
+	TcpDst := dst.(*net.TCPConn)
+	TcpSrc := src.(*net.TCPConn)
+
+	TcpSrc.SetReadBuffer(256 * 1024)
+	TcpSrc.SetWriteBuffer(256 * 1024)
+
+	TcpDst.SetReadBuffer(256 * 1024)
+	TcpDst.SetWriteBuffer(256 * 1024)
+
+	FdDst, _ := TcpDst.File()
+	FdSrc, _ := TcpSrc.File()
+
+	if err == nil {
+		for {
+			w, err := splice.SpliceCopy(FdDst, FdSrc, pair)
+			if err != nil || w == 0 {
+				break
+			}
+		}
+		pair.Close()
+		errCh <- err
 	}
-	errCh <- err
 }
