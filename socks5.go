@@ -2,12 +2,11 @@ package socks5
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"os"
-
-	"golang.org/x/net/context"
 )
 
 const (
@@ -47,8 +46,14 @@ type Config struct {
 	Logger *log.Logger
 
 	// Optional function for dialing out
-	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	Dial DialFunc
+
+	Listener ListenerFunc
 }
+
+type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+type ListenerFunc func(ctx context.Context, network, port string) (net.Listener, error)
 
 // Server is reponsible for accepting connections and handling
 // the details of the SOCKS5 protocol
@@ -114,7 +119,6 @@ func (s *Server) Serve(l net.Listener) error {
 		}
 		go s.ServeConn(conn)
 	}
-	return nil
 }
 
 // ServeConn is used to serve a single connection.
